@@ -73,6 +73,9 @@ Sub ProcessAllEmails()
     eventCount = 0
     responseCount = 0
     
+    ' Reset static counter for fresh run
+    Call ResetResponseCounter
+    
     ' Setup folder and file paths
     On Error GoTo ErrorHandler
     Set fso = CreateObject("Scripting.FileSystemObject")
@@ -153,28 +156,24 @@ Sub ProcessAllEmails()
         
         ' Skip if we can't access this email item or if it's invalid
         If Not mailItem Is Nothing Then
-            ' Additional validation to ensure mailItem is accessible
-            Dim testAccess As String
-            testAccess = ""
-            
-            ' Try to access a basic property to verify the object is valid
+            ' Try to access TypeName to verify the object is valid
             testAccess = TypeName(mailItem)
             If Err.Number <> 0 Then
                 Err.Clear
                 GoTo NextEmail
             End If
             
-            ' Skip if not a MailItem (could be meeting requests, etc.) or if we can't access it
+            ' Skip if not a MailItem (could be meeting requests, etc.)
             If testAccess = "MailItem" Then
                 processedCount = processedCount + 1
                 
-                ' Additional validation for receivedTime
+                ' Get receivedTime with error handling
                 Dim emailDate As Date
                 emailDate = mailItem.receivedTime
                 If Err.Number <> 0 Then
-                    ' Skip this email if we can't get the received time
+                    ' If we can't get received time, use current date as fallback
+                    emailDate = Date
                     Err.Clear
-                    GoTo NextEmail
                 End If
                 
                 ' Check if email was received on or after start date
@@ -186,40 +185,36 @@ Sub ProcessAllEmails()
                         ' Parse the email response
                         responseType = ParseEmailResponse(mailItem)
                         
-                        ' Validate email data before logging to Excel
+                        ' Get email properties with simple error handling
                         Dim senderName As String
                         Dim senderEmail As String
                         Dim emailSubject As String
                         
-                        ' Safely get email properties with validation
-                        senderName = ""
-                        senderEmail = ""
-                        emailSubject = ""
+                        senderName = "Unknown Sender"
+                        senderEmail = "unknown@email.com"
+                        emailSubject = "No Subject"
                         
-                        senderName = mailItem.senderName
-                        If Err.Number <> 0 Then
-                            senderName = "Unknown Sender"
-                            Err.Clear
+                        ' Try to get sender name
+                        On Error Resume Next
+                        If Not IsEmpty(mailItem.senderName) Then
+                            senderName = CStr(mailItem.senderName)
                         End If
                         
-                        senderEmail = mailItem.SenderEmailAddress
-                        If Err.Number <> 0 Then
-                            senderEmail = "unknown@email.com"
-                            Err.Clear
+                        ' Try to get sender email
+                        If Not IsEmpty(mailItem.SenderEmailAddress) Then
+                            senderEmail = CStr(mailItem.SenderEmailAddress)
                         End If
                         
-                        emailSubject = mailItem.subject
-                        If Err.Number <> 0 Then
-                            emailSubject = "No Subject"
-                            Err.Clear
+                        ' Try to get subject
+                        If Not IsEmpty(mailItem.subject) Then
+                            emailSubject = CStr(mailItem.subject)
                         End If
+                        On Error GoTo NextEmail
                         
-                        ' Only log if we have minimum required data
-                        If senderName <> "" Or senderEmail <> "" Then
-                            Call LogResponse(filePath, senderName, senderEmail, responseType, emailDate, emailSubject, eventName)
-                            responseCount = responseCount + 1
-                            emailsProcessed = emailsProcessed + 1
-                        End If
+                        ' Always log the response (even with default values)
+                        Call LogResponse(filePath, senderName, senderEmail, responseType, emailDate, emailSubject, eventName)
+                        responseCount = responseCount + 1
+                        emailsProcessed = emailsProcessed + 1
                     End If
                 End If
                 ' REMOVED: Early exit that was causing the problem
@@ -328,6 +323,12 @@ ErrorHandler:
     End Select
     
     MsgBox errorMsg, vbCritical, "Processing Error"
+End Sub
+
+Sub ResetResponseCounter()
+    ' Reset the static counter in LogResponse for new automation run
+    Static dummy As Long
+    Call LogResponse("RESET", "", "", "", Date, "", "")
 End Sub
 
 Function IsReplyToEvent(mail As mailItem, eventName As String) As Boolean
@@ -606,9 +607,15 @@ Sub LogResponse(filePath As String, senderName As String, senderEmail As String,
     Dim wb As Object
     Dim ws As Object
     Dim lastRow As Long
-    Dim isFirstResponse As Boolean
+    Static responseCounter As Long
     
     On Error GoTo LogError
+    
+    ' Handle reset call
+    If filePath = "RESET" Then
+        responseCounter = 0
+        Exit Sub
+    End If
     
     ' Validate input parameters
     If filePath = "" Or eventName = "" Then
@@ -624,8 +631,7 @@ Sub LogResponse(filePath As String, senderName As String, senderEmail As String,
     ' Create Excel application
     Set ExcelApp = CreateObject("Excel.Application")
     If ExcelApp Is Nothing Then
-        MsgBox "ERROR: Cannot create Excel application.", vbCritical, "Excel Error"
-        Exit Sub
+        Exit Sub ' Skip silently if Excel unavailable
     End If
     
     ' Silent processing
@@ -636,27 +642,27 @@ Sub LogResponse(filePath As String, senderName As String, senderEmail As String,
     ' Open or create file
     If Dir(filePath) = "" Then
         Call CreateEventFile(filePath, eventName)
+        responseCounter = 0  ' Reset counter for new file
     End If
     
     ' Open workbook
     Set wb = ExcelApp.Workbooks.Open(filePath, ReadOnly:=False, UpdateLinks:=False)
     Set ws = wb.Worksheets(1)
     
-    ' Find next row and check if this is first response (clear existing data)
-    lastRow = ws.Cells(ws.Rows.Count, 1).End(-4162).Row
-    If lastRow < 4 Then lastRow = 4
-    
-    ' Check if this is the first response for this run (row 5 empty means fresh start)
-    isFirstResponse = (ws.Cells(5, 1).Value = "" Or ws.Cells(5, 1).Value = Empty)
-    
-    If isFirstResponse Then
-        ' Clear existing data (keep headers in row 4)
+    ' For first response of this run, always clear existing data
+    If responseCounter = 0 Then
+        lastRow = ws.Cells(ws.Rows.Count, 1).End(-4162).Row
         If lastRow > 4 Then
             ws.Range("A5:G" & lastRow).Clear
         End If
-        lastRow = 4  ' Reset to start fresh
+        lastRow = 4
+    Else
+        ' Find the actual last row for subsequent responses
+        lastRow = ws.Cells(ws.Rows.Count, 1).End(-4162).Row
+        If lastRow < 4 Then lastRow = 4
     End If
     
+    responseCounter = responseCounter + 1
     lastRow = lastRow + 1
     
     ' Write data
