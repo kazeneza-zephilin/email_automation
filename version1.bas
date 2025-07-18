@@ -135,6 +135,11 @@ Sub ProcessAllEmails()
     Dim currentProgress As Long
     Dim totalEmails As Long
     Dim debugCounter As Long
+    Dim testAccess As String
+    Dim emailDate As Date
+    Dim senderName As String
+    Dim senderEmail As String
+    Dim emailSubject As String
     
     ' Get total count for progress tracking
     totalEmails = inbox.Items.Count
@@ -143,10 +148,12 @@ Sub ProcessAllEmails()
     
     ' Process emails silently - debug focus on Excel automation only
     
-    For Each mailItem In inbox.Items
+    ' Use index-based loop instead of For Each to avoid iterator issues
+    Dim emailIndex As Long
+    For emailIndex = 1 To totalEmails
         On Error Resume Next ' Continue processing even if one email fails
         
-        currentProgress = currentProgress + 1
+        currentProgress = emailIndex
         
         ' Show progress every 100 emails
         If currentProgress Mod 100 = 0 Or currentProgress = totalEmails Then
@@ -154,42 +161,82 @@ Sub ProcessAllEmails()
             DoEvents ' Allow UI to update
         End If
         
-        ' Skip if we can't access this email item or if it's invalid
-        If Not mailItem Is Nothing Then
-            ' Try to access TypeName to verify the object is valid
-            testAccess = TypeName(mailItem)
-            If Err.Number <> 0 Then
-                Err.Clear
-                GoTo NextEmail
-            End If
+        ' Reset variables for each email
+        testAccess = ""
+        senderName = ""
+        senderEmail = ""
+        emailSubject = ""
+        Set mailItem = Nothing
+        
+        ' Get the email item by index with retry logic for COM errors
+        Dim retryCount As Integer
+        Dim maxRetries As Integer
+        Dim accessSuccessful As Boolean
+        
+        maxRetries = 3
+        accessSuccessful = False
+        
+        For retryCount = 1 To maxRetries
+            On Error Resume Next
+            Set mailItem = Nothing
+            Set mailItem = inbox.Items.Item(emailIndex)
             
-            ' Skip if not a MailItem (could be meeting requests, etc.)
-            If testAccess = "MailItem" Then
-                processedCount = processedCount + 1
-                
-                ' Get receivedTime with error handling
-                Dim emailDate As Date
-                emailDate = mailItem.receivedTime
-                If Err.Number <> 0 Then
-                    ' If we can't get received time, use current date as fallback
-                    emailDate = Date
+            If Not mailItem Is Nothing Then
+                ' Try to access TypeName to verify the object is valid
+                testAccess = TypeName(mailItem)
+                If Err.Number = 0 Then
+                    accessSuccessful = True
+                    Exit For
+                Else
+                    Debug.Print "EMAIL " & currentProgress & ": Retry " & retryCount & "/" & maxRetries & " - TypeName error (" & Err.Number & ": " & Err.Description & ")"
                     Err.Clear
+                    Set mailItem = Nothing
+                    ' Wait a brief moment before retrying
+                    Dim pauseTime As Date
+                    pauseTime = Now
+                    Do While DateDiff("s", pauseTime, Now) < 1
+                        DoEvents
+                    Loop
                 End If
+            Else
+                Debug.Print "EMAIL " & currentProgress & ": Retry " & retryCount & "/" & maxRetries & " - mailItem is Nothing"
+                Err.Clear
+            End If
+        Next retryCount
+        
+        ' Skip if we couldn't access this email item after all retries
+        If Not accessSuccessful Or mailItem Is Nothing Then
+            Debug.Print "EMAIL " & currentProgress & ": FAILED after " & maxRetries & " retries - Skipping"
+            GoTo NextEmail
+        End If
+        
+        ' Continue processing if we successfully accessed the email
+        ' Skip if not a MailItem (could be meeting requests, etc.)
+        If testAccess = "MailItem" Then
+            processedCount = processedCount + 1
+            
+            ' Get receivedTime with error handling
+            On Error Resume Next
+            emailDate = mailItem.receivedTime
+            If Err.Number <> 0 Then
+                ' If we can't get received time, use current date as fallback
+                emailDate = Date
+                Debug.Print "EMAIL " & currentProgress & ": Using fallback date"
+                Err.Clear
+            End If
+            On Error GoTo ErrorHandler
                 
                 ' Check if email was received on or after start date
                 If emailDate >= trackingStartDate Then
                     ' Check if email is a reply to the specific event being tracked
                     If IsReplyToEvent(mailItem, eventName) Then
                         eventCount = eventCount + 1
+                        Debug.Print "EMAIL " & currentProgress & ": MATCHED EVENT - Processing"
                         
                         ' Parse the email response
                         responseType = ParseEmailResponse(mailItem)
                         
                         ' Get email properties with simple error handling
-                        Dim senderName As String
-                        Dim senderEmail As String
-                        Dim emailSubject As String
-                        
                         senderName = "Unknown Sender"
                         senderEmail = "unknown@email.com"
                         emailSubject = "No Subject"
@@ -209,23 +256,30 @@ Sub ProcessAllEmails()
                         If Not IsEmpty(mailItem.subject) Then
                             emailSubject = CStr(mailItem.subject)
                         End If
-                        On Error GoTo NextEmail
+                        Err.Clear
                         
                         ' Always log the response (even with default values)
+                        Debug.Print "EMAIL " & currentProgress & ": WRITING TO EXCEL - " & senderName & " (" & responseType & ")"
                         Call LogResponse(filePath, senderName, senderEmail, responseType, emailDate, emailSubject, eventName)
                         responseCount = responseCount + 1
                         emailsProcessed = emailsProcessed + 1
+                        Debug.Print "EMAIL " & currentProgress & ": EXCEL WRITE COMPLETE - Response count now: " & responseCount
+                    Else
+                        Debug.Print "EMAIL " & currentProgress & ": NOT EVENT RELATED"
                     End If
+                Else
+                    Debug.Print "EMAIL " & currentProgress & ": OUTSIDE DATE RANGE (" & Format(emailDate, "mm/dd/yyyy") & ")"
                 End If
-                ' REMOVED: Early exit that was causing the problem
-                ' We now continue processing all emails regardless of date order
-            End If
+        Else
+            Debug.Print "EMAIL " & currentProgress & ": NOT MAILITEM (" & testAccess & ")"
         End If
         
 NextEmail:
         ' Clear any errors and continue
         If Err.Number <> 0 Then Err.Clear
-    Next mailItem
+        ' Release the mailItem object
+        Set mailItem = Nothing
+    Next emailIndex
     
     ' Clear status bar
     Application.StatusBar = False
@@ -649,13 +703,39 @@ Sub LogResponse(filePath As String, senderName As String, senderEmail As String,
     Set wb = ExcelApp.Workbooks.Open(filePath, ReadOnly:=False, UpdateLinks:=False)
     Set ws = wb.Worksheets(1)
     
-    ' For first response of this run, always clear existing data
+    ' For first response of this run, check if we should clear existing data
     If responseCounter = 0 Then
-        lastRow = ws.Cells(ws.Rows.Count, 1).End(-4162).Row
-        If lastRow > 4 Then
-            ws.Range("A5:G" & lastRow).Clear
+        ' Only clear data if this is a legitimate new run (not a retry)
+        ' Check if file was created recently (within last 5 minutes)
+        Dim fileInfo As Object
+        Set fileInfo = CreateObject("Scripting.FileSystemObject")
+        Dim shouldClear As Boolean
+        shouldClear = True
+        
+        If fileInfo.FileExists(filePath) Then
+            Dim fileDate As Date
+            fileDate = fileInfo.GetFile(filePath).DateLastModified
+            ' If file was modified within last 5 minutes, don't clear (might be continuation)
+            If DateDiff("n", fileDate, Now) < 5 Then
+                shouldClear = False
+                Debug.Print "EXCEL: File recently modified, preserving existing data"
+            End If
         End If
-        lastRow = 4
+        
+        If shouldClear Then
+            Debug.Print "EXCEL: Clearing existing data for fresh run"
+            lastRow = ws.Cells(ws.Rows.Count, 1).End(-4162).Row
+            If lastRow > 4 Then
+                ws.Range("A5:G" & lastRow).Clear
+                Debug.Print "EXCEL: Cleared rows 5 to " & lastRow
+            End If
+            lastRow = 4
+        Else
+            ' Find the actual last row and continue from there
+            lastRow = ws.Cells(ws.Rows.Count, 1).End(-4162).Row
+            If lastRow < 4 Then lastRow = 4
+            Debug.Print "EXCEL: Continuing from existing data, last row: " & lastRow
+        End If
     Else
         ' Find the actual last row for subsequent responses
         lastRow = ws.Cells(ws.Rows.Count, 1).End(-4162).Row
@@ -664,6 +744,8 @@ Sub LogResponse(filePath As String, senderName As String, senderEmail As String,
     
     responseCounter = responseCounter + 1
     lastRow = lastRow + 1
+    
+    Debug.Print "EXCEL: Writing response #" & responseCounter & " to row " & lastRow & " - " & senderName
     
     ' Write data
     ws.Cells(lastRow, 1).Value = senderName
