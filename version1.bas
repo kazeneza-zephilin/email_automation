@@ -47,12 +47,51 @@ Sub ProcessAllEmails()
     
     ' Validate and convert start date
     On Error GoTo InvalidDate
-    trackingStartDate = CDate(startDate)
+    
+    ' Parse date explicitly in MM/DD/YYYY format to avoid regional setting issues
+    Dim dateParts() As String
+    Dim monthPart As Integer
+    Dim dayPart As Integer
+    Dim yearPart As Integer
+    
+    ' Split the date by "/" delimiter
+    dateParts = Split(startDate, "/")
+    
+    ' Validate that we have exactly 3 parts (MM/DD/YYYY)
+    If UBound(dateParts) <> 2 Then
+        GoTo InvalidDate
+    End If
+    
+    ' Extract and validate each part
+    monthPart = CInt(dateParts(0))
+    dayPart = CInt(dateParts(1))
+    yearPart = CInt(dateParts(2))
+    
+    ' Validate ranges
+    If monthPart < 1 Or monthPart > 12 Then GoTo InvalidDate
+    If dayPart < 1 Or dayPart > 31 Then GoTo InvalidDate
+    If yearPart < 2020 Or yearPart > 2030 Then GoTo InvalidDate
+    
+    ' Create date explicitly using DateSerial to ensure MM/DD/YYYY interpretation
+    trackingStartDate = DateSerial(yearPart, monthPart, dayPart)
+    
     On Error GoTo ErrorHandler
     
-    ' Additional date validation
-    If trackingStartDate > Date Then
-        MsgBox "Start date cannot be in the future. Please enter a valid date.", vbExclamation, "Invalid Date"
+    ' Additional date validation - allow dates up to today (more flexible)
+    Dim currentDate As Date
+    currentDate = Date
+    
+    ' Debug: Show the dates being compared
+    Debug.Print "Start date entered: " & Format(trackingStartDate, "mm/dd/yyyy")
+    Debug.Print "Current date: " & Format(currentDate, "mm/dd/yyyy")
+    Debug.Print "Date comparison: trackingStartDate > currentDate = " & (trackingStartDate > currentDate)
+    
+    ' Only flag as future if the start date is more than today
+    If trackingStartDate > currentDate Then
+        MsgBox "Start date cannot be in the future." & vbCrLf & vbCrLf & _
+               "You entered: " & Format(trackingStartDate, "mmmm dd, yyyy") & vbCrLf & _
+               "Today's date: " & Format(currentDate, "mmmm dd, yyyy") & vbCrLf & vbCrLf & _
+               "Please enter a date that is today or earlier.", vbExclamation, "Invalid Date"
         Exit Sub
     End If
     
@@ -321,7 +360,14 @@ NextEmail:
     Exit Sub
 
 InvalidDate:
-    MsgBox "Invalid date format. Please use MM/DD/YYYY format (e.g., 07/15/2025).", vbCritical, "Invalid Date"
+    MsgBox "Invalid date format or date out of range." & vbCrLf & vbCrLf & _
+           "Please use MM/DD/YYYY format where:" & vbCrLf & _
+           "• MM = Month (01-12)" & vbCrLf & _
+           "• DD = Day (01-31)" & vbCrLf & _
+           "• YYYY = Year (2020-2030)" & vbCrLf & vbCrLf & _
+           "Examples:" & vbCrLf & _
+           "• 07/11/2025 = July 11, 2025" & vbCrLf & _
+           "• 12/25/2024 = December 25, 2024", vbCritical, "Invalid Date"
     Exit Sub
 
 ErrorHandler:
