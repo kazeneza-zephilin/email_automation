@@ -543,7 +543,7 @@ Function ParseEmailResponse(mail As mailItem) As String
     emailText = Replace(emailText, vbLf, " ")
     emailText = Replace(emailText, vbTab, " ")
     
-    ' Strong YES indicators (prioritized)
+    ' YES patterns
     If InStr(emailText, "yes, i will attend") > 0 Or _
        InStr(emailText, "yes i will attend") > 0 Or _
        InStr(emailText, "yes, i'll attend") > 0 Or _
@@ -555,10 +555,18 @@ Function ParseEmailResponse(mail As mailItem) As String
        InStr(emailText, "i confirm my attendance") > 0 Or _
        InStr(emailText, "i will definitely attend") > 0 Or _
        InStr(emailText, "absolutely yes") > 0 Or _
-       InStr(emailText, "definitely yes") > 0 Then
+       InStr(emailText, "definitely yes") > 0 Or _
+       (InStr(emailText, " yes ") > 0 And InStr(emailText, "attend") > 0) Or _
+       (InStr(emailText, "yes,") > 0 And InStr(emailText, "attend") > 0) Or _
+       (InStr(emailText, "yes.") > 0 And InStr(emailText, "attend") > 0) Or _
+       InStr(emailText, "i will attend") > 0 Or _
+       InStr(emailText, "i'll attend") > 0 Or _
+       InStr(emailText, "i will be there") > 0 Or _
+       InStr(emailText, "i'll be there") > 0 Or _
+       InStr(emailText, "count me in") > 0 Or _
+       InStr(emailText, "see you there") > 0 Then
         responseType = "Yes"
-    
-    ' Strong NO indicators (prioritized)
+    ' NO patterns
     ElseIf InStr(emailText, "no, i cannot attend") > 0 Or _
            InStr(emailText, "no i cannot attend") > 0 Or _
            InStr(emailText, "no, i can't attend") > 0 Or _
@@ -571,35 +579,8 @@ Function ParseEmailResponse(mail As mailItem) As String
            InStr(emailText, "unfortunately i cannot") > 0 Or _
            InStr(emailText, "unable to attend") > 0 Or _
            InStr(emailText, "will not be able to attend") > 0 Or _
-           InStr(emailText, "won't be able to attend") > 0 Then
-        responseType = "No"
-    
-    ' MAYBE/TENTATIVE indicators
-    ElseIf InStr(emailText, "maybe") > 0 Or _
-           InStr(emailText, "might attend") > 0 Or _
-           InStr(emailText, "tentative") > 0 Or _
-           InStr(emailText, "not sure") > 0 Or _
-           InStr(emailText, "let you know") > 0 Or _
-           InStr(emailText, "will confirm later") > 0 Or _
-           InStr(emailText, "possibly") > 0 Or _
-           InStr(emailText, "depends on") > 0 Or _
-           InStr(emailText, "will try to") > 0 Then
-        responseType = "Maybe"
-    
-    ' Simple YES patterns (less specific)
-    ElseIf (InStr(emailText, " yes ") > 0 And InStr(emailText, "attend") > 0) Or _
-           (InStr(emailText, "yes,") > 0 And InStr(emailText, "attend") > 0) Or _
-           (InStr(emailText, "yes.") > 0 And InStr(emailText, "attend") > 0) Or _
-           InStr(emailText, "i will attend") > 0 Or _
-           InStr(emailText, "i'll attend") > 0 Or _
-           InStr(emailText, "i will be there") > 0 Or _
-           InStr(emailText, "i'll be there") > 0 Or _
-           InStr(emailText, "count me in") > 0 Or _
-           InStr(emailText, "see you there") > 0 Then
-        responseType = "Yes"
-    
-    ' Simple NO patterns (less specific)
-    ElseIf (InStr(emailText, " no ") > 0 And InStr(emailText, "attend") > 0) Or _
+           InStr(emailText, "won't be able to attend") > 0 Or _
+           (InStr(emailText, " no ") > 0 And InStr(emailText, "attend") > 0) Or _
            (InStr(emailText, "no,") > 0 And InStr(emailText, "attend") > 0) Or _
            (InStr(emailText, "no.") > 0 And InStr(emailText, "attend") > 0) Or _
            InStr(emailText, "cannot attend") > 0 Or _
@@ -609,9 +590,8 @@ Function ParseEmailResponse(mail As mailItem) As String
            InStr(emailText, "sorry, no") > 0 Or _
            InStr(emailText, "sorry no") > 0 Then
         responseType = "No"
-    
     Else
-        responseType = "Unknown"
+        responseType = "Unclear"
     End If
     
     ParseEmailResponse = responseType
@@ -660,7 +640,7 @@ Sub CreateEventFile(filePath As String, eventName As String)
     ' Set column headers
     ws.Cells(4, 1).Value = "Name"
     ws.Cells(4, 2).Value = "Email"
-    ws.Cells(4, 3).Value = "Response"
+    ws.Cells(4, 3).Value = "Response (Yes/No/Unclear)"
     ws.Cells(4, 4).Value = "Date Received"
     ws.Cells(4, 5).Value = "Subject"
     ws.Cells(4, 6).Value = "Event Name"
@@ -807,8 +787,7 @@ Sub LogResponse(filePath As String, senderName As String, senderEmail As String,
     Select Case UCase(responseType)
         Case "YES": ws.Cells(lastRow, 3).Interior.Color = RGB(200, 255, 200)
         Case "NO": ws.Cells(lastRow, 3).Interior.Color = RGB(255, 200, 200)
-        Case "MAYBE": ws.Cells(lastRow, 3).Interior.Color = RGB(255, 255, 200)
-        Case "UNKNOWN": ws.Cells(lastRow, 3).Interior.Color = RGB(220, 220, 220)
+        Case "UNCLEAR", "UNKNOWN": ws.Cells(lastRow, 3).Interior.Color = RGB(220, 220, 220)
     End Select
     On Error GoTo LogError
     
